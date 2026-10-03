@@ -410,6 +410,18 @@ def _run_analysis(kind: str, path: str) -> Dict:
     raise ValueError(f"unknown analysis {kind}")
 
 
+def _chords_with_annotations(file_id: str, doc: Dict) -> Dict:
+    """Return a chords analysis doc with saved human labels merged in."""
+    if not doc or doc.get("kind") != "chords":
+        return doc
+    annot_doc = store.get_analysis(file_id, "chords_annotations")
+    saved = (annot_doc or {}).get("data", {}).get("annotations", [])
+    if saved:
+        doc = dict(doc)
+        doc["data"] = chords.apply_annotations(doc.get("data") or {}, saved)
+    return doc
+
+
 @app.get("/api/analyze/<file_id>/<kind>")
 def api_analyze(file_id: str, kind: str):
     entry = _entry(file_id)
@@ -419,13 +431,28 @@ def api_analyze(file_id: str, kind: str):
     if not refresh:
         cached = store.get_analysis(file_id, kind)
         if cached:
+            if kind == "chords":
+                cached = _chords_with_annotations(file_id, cached)
             return jsonify(cached)
     try:
         data = _run_analysis(kind, _abs_path(entry))
     except ValueError as e:
         return jsonify(error=str(e)), 400
     doc = store.save_analysis(file_id, kind, data, {"kind": kind})
+    if kind == "chords":
+        doc = _chords_with_annotations(file_id, doc)
     return jsonify(doc)
+
+
+@app.get("/api/analyze/<file_id>/chords/annotations")
+def api_get_annotations(file_id: str):
+    entry = _entry(file_id)
+    if not entry:
+        return jsonify(error="file not found"), 404
+    doc = store.get_analysis(file_id, "chords_annotations")
+    annotations = (doc or {}).get("data", {}).get("annotations", [])
+    return jsonify({"file_id": file_id, "kind": "chords_annotations",
+                    "annotations": annotations})
 
 
 @app.post("/api/analyze/<file_id>/chords/annotate")
@@ -434,8 +461,9 @@ def api_annotate(file_id: str):
     if not entry:
         return jsonify(error="file not found"), 404
     data = request.get_json(force=True) or {}
-    annotations = data.get("annotations", [])
+    annotations = chords.sanitize_annotations(data.get("annotations", []))
     doc = store.save_analysis(file_id, "chords_annotations", {"annotations": annotations})
+    doc["data"]["annotations"] = annotations
     return jsonify(doc)
 
 

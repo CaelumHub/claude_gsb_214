@@ -89,25 +89,37 @@ function drawChroma() {
   }
 }
 
-function renderSegments() {
+function chordOptions(selected) {
+  return ["N.C.", ...CHORD_LABELS].map(l => {
+    const sel = l === selected ? " selected" : "";
+    const text = l === "N.C." ? "N.C.（无和弦）" : l;
+    return `<option value="${l}"${sel}>${text}</option>`;
+  }).join("");
+}
+
+function renderTimeline() {
   const segs = chordData.segments;
-  const total = chordData.times[chordData.times.length - 1] || 1;
   $("#timeline").innerHTML = segs.map(s => {
     const dur = Math.max(s.end - s.start, 0.001);
     const hue = hueForRoot(s.label);
     const txt = s.label === "N.C." ? "–" : s.label;
-    return `<div title="${s.label}" style="flex:${dur};background:hsl(${hue},55%,45%);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;border-right:1px solid rgba(0,0,0,.3)">${txt}</div>`;
+    const ring = s.annotated ? ";box-shadow:inset 0 0 0 2px #ffd34d" : "";
+    return `<div title="${s.label}${s.annotated ? "（人工修正）" : ""}" style="flex:${dur};background:hsl(${hue},55%,45%);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;border-right:1px solid rgba(0,0,0,.3)${ring}">${txt}</div>`;
   }).join("");
+}
 
-  const opts = CHORD_LABELS.map(l => `<option ${l === "" ? "" : ""} value="${l}">${l === "" ? "N.C." : l}</option>`).join("");
+function renderSegments() {
+  const segs = chordData.segments;
+  renderTimeline();
+
   $("#segTable").innerHTML = segs.map((s, i) => {
     const conf = (chordData.confidence && chordData.confidence[i]) || 0;
     return `<tr>
       <td class="mono">${fmtTime(s.start)}</td>
       <td class="mono">${fmtTime(s.end)}</td>
       <td><select class="annot" data-i="${i}" style="min-width:90px">
-        ${opts.replace(`value="${esc(s.label)}"`, `value="${esc(s.label)}" selected`)}
-      </select></td>
+        ${chordOptions(s.label)}
+      </select>${s.annotated ? ' <span class="tag-manual" title="人工修正">✏️</span>' : ""}</td>
       <td class="mono">${conf.toFixed(2)}</td>
     </tr>`;
   }).join("");
@@ -119,6 +131,8 @@ async function run() {
   const btn = $("#loadBtn"); btn.disabled = true; btn.textContent = "识别中…";
   try {
     chordData = (await API.get(`/api/analyze/${id}/chords`)).data;
+    // The server already merges saved human corrections into segments, so
+    // annotations are initialised from what is displayed (not the raw output).
     annotations = chordData.segments.map(s => ({ start: s.start, end: s.end, label: s.label }));
     drawChroma();
     renderSegments();
@@ -131,11 +145,23 @@ $("#segTable").addEventListener("change", e => {
   if (!e.target.classList.contains("annot")) return;
   const i = +e.target.dataset.i;
   annotations[i].label = e.target.value;
+  chordData.segments[i].label = e.target.value;
+  chordData.segments[i].annotated = true;
+  renderTimeline();
+  // Keep the pencil marker in the table row in sync.
+  const row = e.target.closest("tr");
+  if (row && !row.querySelector(".tag-manual")) {
+    e.target.insertAdjacentHTML("afterend", ' <span class="tag-manual" title="人工修正">✏️</span>');
+  }
 });
 $("#saveAnnot").onclick = async () => {
   const id = $("#fileSel").value;
-  await API.post(`/api/analyze/${id}/chords/annotate`, { annotations });
-  toast("标注已保存到 JSON", "success");
+  const btn = $("#saveAnnot"); btn.disabled = true;
+  try {
+    await API.post(`/api/analyze/${id}/chords/annotate`, { annotations });
+    toast("标注已保存到 JSON", "success");
+  } catch (e) { toast(e.message, "error"); }
+  finally { btn.disabled = false; }
 };
 
 (async () => {

@@ -173,3 +173,51 @@ def _merge_segments(times: List[float], labels: List[str], step: float) -> List[
 
 
 CHORD_LABELS = [t["label"] for t in _TEMPLATE_BANK]
+VALID_LABELS = set(CHORD_LABELS) | {"N.C."}
+
+
+def sanitize_annotations(annotations) -> List[Dict]:
+    """Validate a client-supplied annotation list, dropping malformed items."""
+    out: List[Dict] = []
+    for a in annotations or []:
+        if not isinstance(a, dict):
+            continue
+        try:
+            start = round(float(a["start"]), 3)
+            end = round(float(a["end"]), 3)
+            label = str(a["label"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end > start and label in VALID_LABELS:
+            out.append({"start": start, "end": end, "label": label})
+    return out
+
+
+def apply_annotations(result: Dict, annotations: List[Dict],
+                      tol: float = 0.05) -> Dict:
+    """Overlay human-corrected labels onto an automatic recognition result.
+
+    Annotations are matched to segments by their (start, end) window with a
+    small tolerance (segment boundaries are rounded to milliseconds).
+    Unmatched annotations are left unused rather than raising, so a
+    re-recognition whose segmentation changed never corrupts the display.
+    """
+    saved = []
+    for a in sanitize_annotations(annotations):
+        saved.append((a["start"], a["end"], a["label"]))
+
+    segments = [dict(s) for s in result.get("segments", [])]
+    applied = 0
+    for seg in segments:
+        for start, end, label in saved:
+            if abs(seg["start"] - start) <= tol and abs(seg["end"] - end) <= tol:
+                if label != seg.get("label"):
+                    seg["label"] = label
+                    seg["annotated"] = True
+                    applied += 1
+                break
+
+    out = dict(result)
+    out["segments"] = segments
+    out["has_annotations"] = applied > 0
+    return out
