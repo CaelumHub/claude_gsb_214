@@ -172,4 +172,55 @@ def _merge_segments(times: List[float], labels: List[str], step: float) -> List[
     return [s for s in segments if s["end"] - s["start"] >= step / 2]
 
 
+def apply_annotations(data: Dict, annotations: List[Dict]) -> Dict:
+    """Overlay saved human annotations onto the recognised chord segments.
+
+    ``data`` is the recogniser output (must contain ``segments``); the
+    annotations are ``{start, end, label}`` dicts as saved by the annotate
+    endpoint.  Annotations are matched to segments primarily by position
+    (the recogniser is deterministic, so segment order/timing is stable
+    across runs) and, failing that, by start time.  Segments whose label
+    was actually changed by a human are flagged ``"annotated": True`` and
+    keep the machine label under ``"auto_label"``.  Returns a new data
+    dict; the input is not mutated.
+    """
+    segments = data.get("segments") or []
+    if not segments or not annotations:
+        return data
+
+    def _start(a: Dict) -> float:
+        try:
+            return float(a.get("start", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _label(a: Dict) -> Optional[str]:
+        label = a.get("label")
+        return label if isinstance(label, str) and label else None
+
+    by_start = {}
+    for a in annotations:
+        if isinstance(a, dict) and _label(a):
+            by_start[round(_start(a), 2)] = _label(a)
+
+    merged = []
+    for i, seg in enumerate(segments):
+        label = None
+        if i < len(annotations) and isinstance(annotations[i], dict):
+            a = annotations[i]
+            if abs(_start(a) - float(seg.get("start", 0.0))) <= 1.0:
+                label = _label(a)
+        if label is None:
+            label = by_start.get(round(float(seg.get("start", 0.0)), 2))
+        out = dict(seg)
+        if label and label != out.get("label"):
+            out["auto_label"] = out.get("label")
+            out["label"] = label
+            out["annotated"] = True
+        merged.append(out)
+
+    applied = sum(1 for s in merged if s.get("annotated"))
+    return {**data, "segments": merged, "annotations_applied": applied}
+
+
 CHORD_LABELS = [t["label"] for t in _TEMPLATE_BANK]

@@ -96,7 +96,8 @@ function renderSegments() {
     const dur = Math.max(s.end - s.start, 0.001);
     const hue = hueForRoot(s.label);
     const txt = s.label === "N.C." ? "–" : s.label;
-    return `<div title="${s.label}" style="flex:${dur};background:hsl(${hue},55%,45%);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;border-right:1px solid rgba(0,0,0,.3)">${txt}</div>`;
+    const title = s.annotated ? `${s.label}（人工修正，原识别 ${s.auto_label || "?"}）` : s.label;
+    return `<div title="${esc(title)}" style="flex:${dur};background:hsl(${hue},55%,45%);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;border-right:1px solid rgba(0,0,0,.3)">${txt}${s.annotated ? " ✎" : ""}</div>`;
   }).join("");
 
   const opts = CHORD_LABELS.map(l => `<option ${l === "" ? "" : ""} value="${l}">${l === "" ? "N.C." : l}</option>`).join("");
@@ -107,7 +108,7 @@ function renderSegments() {
       <td class="mono">${fmtTime(s.end)}</td>
       <td><select class="annot" data-i="${i}" style="min-width:90px">
         ${opts.replace(`value="${esc(s.label)}"`, `value="${esc(s.label)}" selected`)}
-      </select></td>
+      </select>${s.annotated ? ` <span class="small" style="color:var(--green)" title="人工修正，原识别 ${esc(s.auto_label || "?")}">✎</span>` : ""}</td>
       <td class="mono">${conf.toFixed(2)}</td>
     </tr>`;
   }).join("");
@@ -122,6 +123,9 @@ async function run() {
     annotations = chordData.segments.map(s => ({ start: s.start, end: s.end, label: s.label }));
     drawChroma();
     renderSegments();
+    if (chordData.annotations_applied > 0) {
+      toast(`已加载 ${chordData.annotations_applied} 处人工标注`, "success");
+    }
   } catch (e) { toast(e.message, "error"); }
   finally { btn.disabled = false; btn.textContent = "识别"; }
 }

@@ -410,6 +410,22 @@ def _run_analysis(kind: str, path: str) -> Dict:
     raise ValueError(f"unknown analysis {kind}")
 
 
+def _with_chord_annotations(file_id: str, kind: str, doc: Dict) -> Dict:
+    """Overlay saved human annotations onto a chords analysis document.
+
+    Annotations are stored separately (kind ``chords_annotations``) so the
+    automatic recognition result stays intact; they are merged in here, at
+    read time, so corrected labels survive page reloads and re-opens.
+    """
+    if kind != "chords" or not doc:
+        return doc
+    saved = store.get_analysis(file_id, "chords_annotations")
+    annotations = (saved or {}).get("data", {}).get("annotations") or []
+    if not annotations:
+        return doc
+    return {**doc, "data": chords.apply_annotations(doc.get("data") or {}, annotations)}
+
+
 @app.get("/api/analyze/<file_id>/<kind>")
 def api_analyze(file_id: str, kind: str):
     entry = _entry(file_id)
@@ -419,13 +435,23 @@ def api_analyze(file_id: str, kind: str):
     if not refresh:
         cached = store.get_analysis(file_id, kind)
         if cached:
-            return jsonify(cached)
+            return jsonify(_with_chord_annotations(file_id, kind, cached))
     try:
         data = _run_analysis(kind, _abs_path(entry))
     except ValueError as e:
         return jsonify(error=str(e)), 400
     doc = store.save_analysis(file_id, kind, data, {"kind": kind})
-    return jsonify(doc)
+    return jsonify(_with_chord_annotations(file_id, kind, doc))
+
+
+@app.get("/api/analyze/<file_id>/chords/annotations")
+def api_get_annotations(file_id: str):
+    entry = _entry(file_id)
+    if not entry:
+        return jsonify(error="file not found"), 404
+    saved = store.get_analysis(file_id, "chords_annotations")
+    annotations = (saved or {}).get("data", {}).get("annotations") or []
+    return jsonify({"annotations": annotations})
 
 
 @app.post("/api/analyze/<file_id>/chords/annotate")
@@ -435,7 +461,22 @@ def api_annotate(file_id: str):
         return jsonify(error="file not found"), 404
     data = request.get_json(force=True) or {}
     annotations = data.get("annotations", [])
-    doc = store.save_analysis(file_id, "chords_annotations", {"annotations": annotations})
+    if not isinstance(annotations, list):
+        return jsonify(error="annotations must be a list"), 400
+    cleaned = []
+    for a in annotations:
+        if not isinstance(a, dict):
+            return jsonify(error="each annotation must be an object"), 400
+        try:
+            start = float(a.get("start", 0.0))
+            end = float(a.get("end", 0.0))
+        except (TypeError, ValueError):
+            return jsonify(error="annotation start/end must be numbers"), 400
+        label = a.get("label")
+        if not isinstance(label, str) or not label:
+            return jsonify(error="each annotation needs a non-empty label"), 400
+        cleaned.append({"start": start, "end": end, "label": label})
+    doc = store.save_analysis(file_id, "chords_annotations", {"annotations": cleaned})
     return jsonify(doc)
 
 
